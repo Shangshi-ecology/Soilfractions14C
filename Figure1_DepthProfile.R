@@ -1,11 +1,19 @@
 # =============================================================================
 # Figure 1 — Δ¹⁴C of paired POM and MAOM density fractions, by depth.
-#
+
+
+## Authors:   Shangshi Liu, Jonathan Sanderman, Mark A. Bradford
+# Citation:  [add manuscript citation when accepted]
+
 # This script reproduces Figure 1 of the manuscript. It loads the ISRaD
 # flat-fraction product, pairs free-light and occluded-light POM with the
 # corresponding heavy (MAOM) fraction separated from the same physical
 # soil aliquot, and fits a three-level linear mixed-effects model to the
 # within-aliquot paired difference (POM − MAOM) at each depth bin.
+#
+# Sample-inclusion criteria are set in the `Inclusion criteria` block below
+# (section 0) so that every filter applied to the data is visible in one
+# place and can be varied for sensitivity analysis.
 #
 # Output files:
 #   Figure1_DepthProfile.pdf / .png        4-panel composite figure
@@ -28,6 +36,16 @@ suppressPackageStartupMessages({
   library(lmerTest)
   library(patchwork)
 })
+
+# -----------------------------------------------------------------------------
+# 0. Inclusion criteria
+# -----------------------------------------------------------------------------
+# We restrict the analysis to samples collected in or after
+# YEAR_MIN.  We also exclude layers thicker than MAX_THICK_CM, which would
+# otherwise average Δ¹⁴C across several of the 10-cm depth increments used for
+# binning.
+YEAR_MIN     <- 2000    # earliest sampling year retained
+MAX_THICK_CM <- 30      # maximum layer thickness retained (cm)
 
 # -----------------------------------------------------------------------------
 # 1. Load the ISRaD flat-fraction product
@@ -65,17 +83,29 @@ classify_pool <- function(prop) {
 # 3. Filter and prepare the analysis frame
 # -----------------------------------------------------------------------------
 # We retain density-fractionation measurements with reported Δ¹⁴C and known
-# depth bounds, and exclude above-ground litter (layer midpoint < 0 cm).
+# depth bounds, and exclude organic horizons, above-ground litter, samples
+# collected before YEAR_MIN, and layers thicker than MAX_THICK_CM.
+#
+#
+obs_year_col <- if ("lyr_obs_date_y.x" %in% names(raw)) "lyr_obs_date_y.x" else
+                                                        "lyr_obs_date_y"
+raw <- raw |> mutate(obs_year = .data[[obs_year_col]])
+
 d <- raw |>
   filter(frc_scheme == "density",
+         is.na(lyr_all_org_neg) | lyr_all_org_neg != "yes",
          !is.na(frc_14c),
          !is.na(lyr_top), !is.na(lyr_bot)) |>
   mutate(lyr_mid    = (lyr_top + lyr_bot) / 2,
+         thickness  = lyr_bot - lyr_top,
          pool       = classify_pool(frc_property),
          entry_name = as.character(entry_name),
          site_id    = paste0(entry_name, "::", site_name),
          profile_id = paste0(site_id,   "::", pro_name)) |>
-  filter(lyr_mid >= 0, !is.na(pool))
+  filter(lyr_top   >= 0,
+         obs_year  >= YEAR_MIN,
+         thickness <= MAX_THICK_CM,
+         !is.na(pool))
 
 # -----------------------------------------------------------------------------
 # 4. Depth bins and the "All paired" overall row
@@ -447,10 +477,10 @@ make_legend_panel <- function(items, colors) {
 # Rows: (a, b) = free POM vs MAOM; (c, d) = occluded POM vs MAOM.
 # Columns: left = depth profile of both pools; right = paired difference.
 pa <- plot_profile(c("fPOM", "MAOM"), paired_fp, pool_summary_fp,
-                    "a", "Free POM vs. MAOM (paired)")
+                    "a", "Free POM vs. MAOM")
 pb <- plot_diff(   free_d, wide_free, "b", "Free POM − MAOM")
 pc <- plot_profile(c("oPOM", "MAOM"), paired_op, pool_summary_op,
-                    "c", "Occluded POM vs. MAOM (paired)")
+                    "c", "Occluded POM vs. MAOM")
 pd <- plot_diff(   occ_d,  wide_occ,  "d", "Occluded POM − MAOM")
 
 leg <- make_legend_panel(
@@ -469,7 +499,8 @@ final <- wrap_elements(full = fig) /
          plot_layout(heights = c(20, 1))
 
 ggsave("Figure1_DepthProfile.pdf", final,
-       width = 6, height = 6, device = cairo_pdf)
+       width = 6.2, height = 6, device = cairo_pdf)
 ggsave("Figure1_DepthProfile.png", final,
-       width = 6, height = 6, dpi = 600, bg = "white")
+       width = 6.2, height = 6, dpi = 600, bg = "white")
 message("Wrote Figure1_DepthProfile.pdf, .png and _table.csv")
+
