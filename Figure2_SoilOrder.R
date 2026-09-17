@@ -1,7 +1,7 @@
 # =============================================================================
 # Figure 2 — Δ¹⁴C of paired POM and MAOM density fractions, by USDA soil order.
 #
-# Authors:   [add author list]
+# Authors:   Shangshi Liu, Jonathan Sanderman, Mark A. Bradford
 # Citation:  [add manuscript citation when accepted]
 # Licence:   MIT (code) / CC-BY 4.0 (figure outputs)
 #
@@ -11,9 +11,12 @@
 # (with depths pooled).  Rows are ordered top-to-bottom by descending
 # free-POM − MAOM gap.
 #
+# Sample-inclusion criteria are set in the `Inclusion criteria` block below
+# (section 0), matching Figure1_DepthProfile.R.
+#
 # Output files:
-#   Figure1_DepthProfile.pdf / .png        4-panel composite figure
-#   Figure1_DepthProfile_table.csv         numerical summary of every cell
+#   Figure2_SoilOrder.pdf / .png           4-panel composite figure
+#   Figure2_SoilOrder_table.csv            numerical summary of every cell
 #
 # Dependencies:
 #   R >= 4.3
@@ -32,6 +35,15 @@ suppressPackageStartupMessages({
   library(lmerTest)
   library(patchwork)
 })
+
+# -----------------------------------------------------------------------------
+# 0. Inclusion criteria  (identical to Figure1_DepthProfile.R)
+# -----------------------------------------------------------------------------
+# Samples are restricted to those collected in or after YEAR_MIN. Layers thicker than
+# MAX_THICK_CM are excluded so that no single Δ¹⁴C value averages over an
+# excessive depth range.
+YEAR_MIN     <- 2000    # earliest sampling year retained
+MAX_THICK_CM <- 30      # maximum layer thickness retained (cm)
 
 # -----------------------------------------------------------------------------
 # 1. Load the ISRaD flat-fraction product
@@ -61,18 +73,29 @@ classify_pool <- function(prop) {
 # 3. Filter, prepare hierarchical identifiers, and attach soil order
 # -----------------------------------------------------------------------------
 # We retain density-fractionation measurements with reported Δ¹⁴C and known
-# depth bounds, exclude above-ground litter (layer midpoint < 0 cm), and
-# keep paired observations regardless of the organic-horizon flag.
+# depth bounds, and exclude organic horizons, above-ground litter, samples
+# collected before YEAR_MIN, and layers thicker than MAX_THICK_CM.
+#
+
+obs_year_col <- if ("lyr_obs_date_y.x" %in% names(raw)) "lyr_obs_date_y.x" else
+                                                        "lyr_obs_date_y"
+raw <- raw |> mutate(obs_year = .data[[obs_year_col]])
+
 d <- raw |>
   filter(frc_scheme == "density",
+         is.na(lyr_all_org_neg) | lyr_all_org_neg != "yes",
          !is.na(frc_14c),
          !is.na(lyr_top), !is.na(lyr_bot)) |>
   mutate(lyr_mid    = (lyr_top + lyr_bot) / 2,
+         thickness  = lyr_bot - lyr_top,
          pool       = classify_pool(frc_property),
          entry_name = as.character(entry_name),
          site_id    = paste0(entry_name, "::", site_name),
          profile_id = paste0(site_id,   "::", pro_name)) |>
-  filter(lyr_mid >= 0, !is.na(pool))
+  filter(lyr_top   >= 0,
+         obs_year  >= YEAR_MIN,
+         thickness <= MAX_THICK_CM,
+         !is.na(pool))
 
 # USDA soil order is read from `pro_usda_soil_order`, with the legacy
 # `pro_soilOrder_USDA` column used as a fallback when the primary column is
@@ -254,7 +277,21 @@ C_ZERO <- "#8B7355"
 
 # Single goldenrod for all raw-observation points (no depth coding).
 RAW_POINT_COL  <- "#F2C14E"
-XRANGE_PROFILE <- c(-1050, 250)
+
+# Axis ranges are derived from the data rather than fixed, so that every raw
+# observation and every confidence bound is drawn inside its panel.  A fixed
+# or capped range would omit extreme values from the figure while still
+# letting them influence the plotted means, which cannot be reconciled by a
+# reader inspecting the points.
+#
+# Helper: the range spanned by every value that will be drawn, with a small
+# margin so markers are not clipped by the panel edge.
+data_range <- function(..., pad = 0.04) {
+  v <- c(...)
+  v <- v[is.finite(v)]
+  r <- range(v)
+  r + c(-1, 1) * max(pad * diff(r), 1e-8)
+}
 
 theme_nature <- function() {
   theme_classic(base_size = 7, base_family = "Helvetica") +
@@ -284,6 +321,7 @@ plot_profile <- function(pools, raw_long, summary_df,
                           panel_tag, panel_title) {
   raw_sub <- raw_long |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
   ps_sub  <- summary_df |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
+  xrange  <- data_range(raw_sub$frc_14c, ps_sub$lo, ps_sub$hi, ps_sub$mean)
   pal     <- c(fPOM = C_FPOM, oPOM = C_OPOM, MAOM = C_MAOM)
   dy_map  <- setNames(c(-0.15, 0.15), pools)
 
@@ -319,7 +357,7 @@ plot_profile <- function(pools, raw_long, summary_df,
                         labels = ORDERED_ORDERS,
                         trans  = "reverse",
                         expand = expansion(add = 0.5)) +
-    coord_cartesian(xlim = XRANGE_PROFILE, clip = "off") +
+    coord_cartesian(xlim = xrange, clip = "on") +
     labs(x = expression(Delta^14*"C (‰)"), y = NULL,
          tag = panel_tag, title = panel_title) +
     theme_nature() + theme(legend.position = "none")
@@ -328,8 +366,14 @@ plot_profile <- function(pools, raw_long, summary_df,
 # -----------------------------------------------------------------------------
 # 9. Difference panels (b, d) — POM − MAOM per soil order
 # -----------------------------------------------------------------------------
+# `label_nudge` is an optional named vector of per-soil-order vertical offsets
+# for the "k=, n=" annotation, in y data units.  The y axis is reversed, so a
+# negative value raises that row's label.  It is used where a wide confidence
+# interval would otherwise run underneath the text.  Soil orders not named in
+# the vector are left in place.
 plot_diff <- function(diff_summary, wide_pair_df, pom_col,
-                       panel_tag, panel_title) {
+                       panel_tag, panel_title,
+                       label_nudge = NULL) {
   raw <- wide_pair_df |>
     filter(!is.na(.data[[pom_col]]), !is.na(MAOM),
            order %in% ORDERED_ORDERS) |>
@@ -340,16 +384,15 @@ plot_diff <- function(diff_summary, wide_pair_df, pom_col,
     mutate(yi = match(order, ORDERED_ORDERS) - 1,
            sig_zero = !is.na(p) & p < 0.05,
            fill_col = ifelse(sig_zero, C_DIFF, "white"),
-           label    = sprintf("k=%d, n=%d %s", k, n, sig))
+           label    = sprintf("k=%d, n=%d %s", k, n, sig),
+           y_lab    = yi + if (is.null(label_nudge)) 0 else
+                      coalesce(unname(label_nudge[as.character(order)]), 0))
 
-  # X-axis range is set from the union of CI bounds and raw points, then
-  # capped at the 4th / 96th percentile of the raw points so a single
-  # outlier cannot squash the rest of the figure.
+  # X-axis range spans every CI bound and every raw paired difference, so
+  # nothing plotted falls outside the panel.
   finite <- ds |> filter(!is.na(lo), !is.na(hi))
-  xmax <- max(c(finite$hi, raw$value, 200), na.rm = TRUE)
-  xmin <- min(c(finite$lo, raw$value, -200), na.rm = TRUE)
-  xmax <- min(xmax, max(quantile(raw$value, 0.96, na.rm = TRUE), 300))
-  xmin <- max(xmin, min(quantile(raw$value, 0.04, na.rm = TRUE), -300))
+  rng  <- data_range(finite$hi, finite$lo, raw$value)
+  xmin <- rng[1]; xmax <- rng[2]
   xpad <- max(60, 0.05 * (xmax - xmin))
   x_annot <- xmax + xpad
 
@@ -369,7 +412,7 @@ plot_diff <- function(diff_summary, wide_pair_df, pom_col,
                aes(x = mean, y = yi, fill = I(fill_col)),
                shape = 21, color = "black", size = 1.8, stroke = 0.35,
                na.rm = TRUE) +
-    geom_text(data = ds, aes(x = x_annot, y = yi, label = label),
+    geom_text(data = ds, aes(x = x_annot, y = y_lab, label = label),
               hjust = 0, size = 1.95, color = "grey25", na.rm = TRUE) +
     scale_y_continuous(breaks = seq_along(ORDERED_ORDERS) - 1,
                         labels = ORDERED_ORDERS,
@@ -423,7 +466,8 @@ make_legend_panel <- function(items, colors, key_name, fill = TRUE) {
 pa <- plot_profile(c("fPOM", "MAOM"), paired_fp, pool_fp,
                     "a", "Free POM vs. MAOM")
 pb <- plot_diff(   free_d, wide, "fPOM",
-                    "b", "Free POM − MAOM")
+                    "b", "Free POM − MAOM",
+                    label_nudge = c(Gelisols = -0.30))
 pc <- plot_profile(c("oPOM", "MAOM"), paired_op, pool_op,
                     "c", "Occluded POM vs. MAOM")
 pd <- plot_diff(   occ_d,  wide, "oPOM",
@@ -446,7 +490,7 @@ final <- wrap_elements(full = fig) /
          plot_layout(heights = c(28, 1))
 
 ggsave("Figure2_SoilOrder.pdf", final,
-       width = 6, height = 6, device = cairo_pdf)
+       width = 6.5, height = 6, device = cairo_pdf)
 ggsave("Figure2_SoilOrder.png", final,
-       width = 6, height = 6, dpi = 600, bg = "white")
+       width = 6.5, height = 6, dpi = 600, bg = "white")
 message("Wrote Figure2_SoilOrder.pdf, .png and _table.csv")
