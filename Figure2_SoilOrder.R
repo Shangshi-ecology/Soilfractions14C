@@ -2,7 +2,6 @@
 # Figure 2 — Δ¹⁴C of paired POM and MAOM density fractions, by USDA soil order.
 #
 # Authors:   Shangshi Liu, Jonathan Sanderman, Mark A. Bradford
-# Citation:  [add manuscript citation when accepted]
 # Licence:   MIT (code) / CC-BY 4.0 (figure outputs)
 #
 # This script reproduces Figure 2 of the manuscript. It uses the same data
@@ -97,7 +96,7 @@ d <- raw |>
          thickness <= MAX_THICK_CM,
          !is.na(pool))
 
-# USDA soil order is read from `pro_usda_soil_order`, with the legacy
+# USDA soil order is read from `pro_usda_soil_order`, with the ISRaD-derived
 # `pro_soilOrder_USDA` column used as a fallback when the primary column is
 # missing.  Source values are trimmed and title-cased; the historical
 # misspelling "Spodisols" is re-mapped to the canonical "Spodosols".
@@ -120,6 +119,11 @@ d <- d |>
 # are only entered as a hard-error backstop when lmer() cannot return a
 # model at all (PIRLS failure, n too small for the requested structure).
 # Wald 95 % CI and matching Wald-z p-value; k = 1 strata report mean only.
+# A Wald z-test, the default in most meta-analyses, is used here and may
+# reduce the risk of Type II error (missing a real occluded POM-MAOM
+# difference). Significant results in strata with few studies should
+# therefore be interpreted with caution, and more observations are needed
+# for under-represented soil orders.
 fit_nested <- function(y, entry, site, profile) {
   ok <- !is.na(y);  y <- y[ok]; entry <- entry[ok]
   site <- site[ok]; profile <- profile[ok]
@@ -151,13 +155,68 @@ fit_nested <- function(y, entry, site, profile) {
     co <- summary(m)$coefficients
     mu <- co[1, 1]; se <- co[1, 2]
     return(list(mean = mu, lo = mu - 1.96 * se, hi = mu + 1.96 * se,
-                 p = 2 * (1 - pnorm(abs(mu / se))),
+                 p = 2 * pnorm(-abs(mu / se)),
                  model = "ols", n = n, k = k))
   }
   co <- summary(m)$coefficients
   mu <- co[1, 1]; se <- co[1, 2]
   list(mean = mu, lo = mu - 1.96 * se, hi = mu + 1.96 * se,
-       p = 2 * (1 - pnorm(abs(mu / se))), model = used, n = n, k = k)
+       p = 2 * pnorm(-abs(mu / se)), model = used, n = n, k = k)
+}
+
+# -----------------------------------------------------------------------------
+# Annotation columns inside each difference panel:
+#   k = 38 (496)    P = 3.8×10⁻⁵
+# k = number of independent studies, the number in brackets = number of paired
+# observations (n).  The "k" column and the "P" column are each left-aligned at
+# a fixed position, so all k values and all P values line up vertically.
+# P >= 0.01 is shown to two significant figures (three if rounding would
+# cross 0.05); P < 0.01 in scientific notation with a two-figure mantissa
+# written with Unicode superscripts, so every label has the same height.
+# P is omitted for strata without an inferential test (k = 1 or n < 2).
+#
+# Layout: the x range runs from the lowest raw point to the highest CI bound; the label
+# block takes the right-hand LAB_FRAC of the panel width, starting just right
+# of the highest CI bound, so labels never overlap bars (they may overlap raw
+# points).  The left limit is the lowest raw point, so no data are dropped.  The P column starts LAB_P_OFFSET (fraction of panel width) to the
+# right of the k column.
+# -----------------------------------------------------------------------------
+LAB_FRAC     <- 0.37
+LAB_P_OFFSET <- 0.17
+LAB_SIZE     <- 1.7   # label text size (mm)
+
+SUP_DIGITS <- c("⁰", "¹", "²", "³", "⁴",
+                "⁵", "⁶", "⁷", "⁸", "⁹")
+to_sup <- function(e) {
+  ch <- strsplit(as.character(abs(e)), "")[[1]]
+  paste0(if (e < 0) "⁻" else "",
+         paste(SUP_DIGITS[as.integer(ch) + 1], collapse = ""))
+}
+fmt_p_str <- function(x) {
+  if (is.na(x)) return(NA_character_)
+  if (x < 1e-300) return(paste0("< 10", to_sup(-300)))
+  if (x >= 0.01) {
+    d <- if ((signif(x, 2) < 0.05) != (x < 0.05)) 3 else 2
+    return(paste0("= ", formatC(signif(x, d), digits = d, format = "fg",
+                                flag = "#")))
+  }
+  e <- floor(log10(x)); m <- signif(x / 10^e, 2)
+  if (m >= 10) { m <- m / 10; e <- e + 1 }
+  paste0("= ", formatC(m, digits = 1, format = "f"), "×10", to_sup(e))
+}
+fmt_k_label <- function(k, n, p) {
+  sprintf('italic(k)*" = %d (%d)"', k, n)
+}
+fmt_p_label <- function(p) {
+  s <- vapply(p, fmt_p_str, character(1))
+  ifelse(is.na(s), NA_character_, sprintf('italic(P)*" %s"', s))
+}
+# x positions (data units): bars span [lo, hi]; labels start at hi
+label_layout <- function(lo, hi) {
+  lim_hi <- lo + (hi - lo) / (1 - LAB_FRAC)
+  list(lim = c(lo, lim_hi),
+       x_k = hi,
+       x_p = hi + LAB_P_OFFSET * (lim_hi - lo))
 }
 
 # -----------------------------------------------------------------------------
@@ -269,9 +328,9 @@ bind_rows(
 # -----------------------------------------------------------------------------
 # 7. Plot styling
 # -----------------------------------------------------------------------------
-C_FPOM <- "#D62728"
+C_FPOM <- "#FFA35C"   # light orange (free POM; lighter than occluded-POM orange)
 C_OPOM <- "#D55E00"
-C_MAOM <- "#0072B2"
+C_MAOM <- "#0079D5"
 C_DIFF <- "#444444"
 C_ZERO <- "#8B7355"
 
@@ -306,7 +365,8 @@ theme_nature <- function() {
                                               linewidth = 0.25),
           legend.title    = element_text(size = 6.5),
           legend.text     = element_text(size = 6.5),
-          legend.key.size = unit(0.3, "cm"))
+          legend.key.size = unit(0.3, "cm"),
+          plot.margin     = margin(2, 4, 2, 2))
 }
 
 # Alternating row-stripe background so the eye can follow rows across the
@@ -318,10 +378,11 @@ stripe_df <- tibble(pos = seq_len(length(ORDERED_ORDERS)) - 1) |>
 # 8. Profile panels (a, c) — Δ¹⁴C of each fraction per soil order
 # -----------------------------------------------------------------------------
 plot_profile <- function(pools, raw_long, summary_df,
-                          panel_tag, panel_title) {
+                          panel_tag, panel_title, xrange = NULL) {
   raw_sub <- raw_long |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
   ps_sub  <- summary_df |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
-  xrange  <- data_range(raw_sub$frc_14c, ps_sub$lo, ps_sub$hi, ps_sub$mean)
+  if (is.null(xrange))
+    xrange <- data_range(raw_sub$frc_14c, ps_sub$lo, ps_sub$hi, ps_sub$mean)
   pal     <- c(fPOM = C_FPOM, oPOM = C_OPOM, MAOM = C_MAOM)
   dy_map  <- setNames(c(-0.15, 0.15), pools)
 
@@ -373,7 +434,7 @@ plot_profile <- function(pools, raw_long, summary_df,
 # the vector are left in place.
 plot_diff <- function(diff_summary, wide_pair_df, pom_col,
                        panel_tag, panel_title,
-                       label_nudge = NULL) {
+                       label_nudge = NULL, zero_frac = NULL) {
   raw <- wide_pair_df |>
     filter(!is.na(.data[[pom_col]]), !is.na(MAOM),
            order %in% ORDERED_ORDERS) |>
@@ -384,7 +445,8 @@ plot_diff <- function(diff_summary, wide_pair_df, pom_col,
     mutate(yi = match(order, ORDERED_ORDERS) - 1,
            sig_zero = !is.na(p) & p < 0.05,
            fill_col = ifelse(sig_zero, C_DIFF, "white"),
-           label    = sprintf("k=%d, n=%d %s", k, n, sig),
+           lab_k    = fmt_k_label(k, n, p),
+           lab_p    = fmt_p_label(p),
            y_lab    = yi + if (is.null(label_nudge)) 0 else
                       coalesce(unname(label_nudge[as.character(order)]), 0))
 
@@ -394,9 +456,24 @@ plot_diff <- function(diff_summary, wide_pair_df, pom_col,
   rng  <- data_range(finite$hi, finite$lo, raw$value)
   xmin <- rng[1]; xmax <- rng[2]
   xpad <- max(60, 0.05 * (xmax - xmin))
-  x_annot <- xmax + xpad
 
-  ggplot() +
+  # Left limit: the lowest raw point, CI bound or mean (no empty space, no
+  # points dropped).  Right: the label block starts just past the highest CI
+  # bound or mean, so labels never overlap bars (raw points may sit beneath).
+  b_lo <- min(c(raw$value, finite$lo, ds$mean, 0), na.rm = TRUE)
+  b_hi <- max(c(finite$hi, ds$mean, 0), na.rm = TRUE)
+  bpad <- 0.03 * (b_hi - b_lo)
+  lo   <- b_lo - bpad; hi <- b_hi + bpad
+  # Optionally widen the left side so that x = 0 sits at a given fraction
+  # of the panel width (used to align the zero line across panels b and d).
+  if (!is.null(zero_frac)) {
+    f_nat <- -lo * (1 - LAB_FRAC) / (hi - lo)
+    if (zero_frac > f_nat) lo <- zero_frac * hi / (zero_frac - 1 + LAB_FRAC)
+  }
+  lay  <- label_layout(lo, hi)
+  ds  <- ds |> mutate(x_k = lay$x_k, x_p = lay$x_p)
+
+  p <- ggplot() +
     geom_rect(data = stripe_df,
               aes(xmin = -Inf, xmax = Inf,
                   ymin = pos - 0.5, ymax = pos + 0.5),
@@ -412,16 +489,24 @@ plot_diff <- function(diff_summary, wide_pair_df, pom_col,
                aes(x = mean, y = yi, fill = I(fill_col)),
                shape = 21, color = "black", size = 1.8, stroke = 0.35,
                na.rm = TRUE) +
-    geom_text(data = ds, aes(x = x_annot, y = y_lab, label = label),
-              hjust = 0, size = 1.95, color = "grey25", na.rm = TRUE) +
+    geom_text(data = ds, aes(x = x_k, y = y_lab, label = lab_k),
+              hjust = 0, size = LAB_SIZE, color = "grey25", na.rm = TRUE,
+              parse = TRUE) +
+    geom_text(data = ds, aes(x = x_p, y = y_lab, label = lab_p),
+              hjust = 0, size = LAB_SIZE, color = "grey25", na.rm = TRUE,
+              parse = TRUE) +
     scale_y_continuous(breaks = seq_along(ORDERED_ORDERS) - 1,
                         labels = ORDERED_ORDERS,
                         trans  = "reverse",
                         expand = expansion(add = 0.5)) +
-    coord_cartesian(xlim = c(xmin - xpad, x_annot + 230), clip = "off") +
+    scale_x_continuous(breaks = scales::breaks_extended()(c(b_lo, b_hi)),
+                       expand = expansion(0, 0)) +
+    coord_cartesian(xlim = lay$lim, clip = "on") +
     labs(x = expression("POM − MAOM  "*Delta^14*"C (‰)"), y = NULL,
          tag = panel_tag, title = panel_title) +
     theme_nature() + theme(legend.position = "none")
+  attr(p, "zero_frac") <- -lay$lim[1] / diff(lay$lim)
+  p
 }
 
 # -----------------------------------------------------------------------------
@@ -463,15 +548,30 @@ make_legend_panel <- function(items, colors, key_name, fill = TRUE) {
 # Rows: (a, b) = free POM vs MAOM; (c, d) = occluded POM vs MAOM.
 # Columns: left = soil-order profile of both fractions; right = paired
 # difference per soil order.
+# Panels a and c share one x range, so their zero lines and scales match.
+.prof_rng <- function(pools, raw_long, summary_df) {
+  r <- raw_long  |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
+  s <- summary_df |> filter(pool %in% pools, order %in% ORDERED_ORDERS)
+  data_range(r$frc_14c, s$lo, s$hi, s$mean)
+}
+xr_ac <- range(c(.prof_rng(c("fPOM", "MAOM"), paired_fp, pool_fp),
+                 .prof_rng(c("oPOM", "MAOM"), paired_op, pool_op)))
+
 pa <- plot_profile(c("fPOM", "MAOM"), paired_fp, pool_fp,
-                    "a", "Free POM vs. MAOM")
-pb <- plot_diff(   free_d, wide, "fPOM",
-                    "b", "Free POM − MAOM",
-                    label_nudge = c(Gelisols = -0.30))
+                    "a", "Free POM vs. MAOM", xrange = xr_ac)
 pc <- plot_profile(c("oPOM", "MAOM"), paired_op, pool_op,
-                    "c", "Occluded POM vs. MAOM")
-pd <- plot_diff(   occ_d,  wide, "oPOM",
-                    "d", "Occluded POM − MAOM")
+                    "c", "Occluded POM vs. MAOM", xrange = xr_ac)
+
+# Panels b and d keep their own x scales, but the zero line is placed at the
+# same horizontal position: build once, then rebuild with the larger of the
+# two zero positions.
+pb <- plot_diff(free_d, wide, "fPOM", "b", "Free POM − MAOM",
+                label_nudge = c(Gelisols = -0.30))
+pd <- plot_diff(occ_d,  wide, "oPOM", "d", "Occluded POM − MAOM")
+z_bd <- max(attr(pb, "zero_frac"), attr(pd, "zero_frac"))
+pb <- plot_diff(free_d, wide, "fPOM", "b", "Free POM − MAOM",
+                label_nudge = c(Gelisols = -0.30), zero_frac = z_bd)
+pd <- plot_diff(occ_d,  wide, "oPOM", "d", "Occluded POM − MAOM", zero_frac = z_bd)
 
 leg_pool <- make_legend_panel(
   items  = c("Free POM", "Occluded POM", "MAOM",
@@ -482,8 +582,7 @@ leg_pool <- make_legend_panel(
   key_name = NULL, fill = TRUE)
 
 fig <- (pa | pb) / (pc | pd) +
-  plot_layout(widths = c(1, 1.05)) &
-  theme(plot.margin = margin(2, 4, 2, 2))
+  plot_layout(widths = c(1, 1.05))
 
 final <- wrap_elements(full = fig) /
          wrap_elements(full = leg_pool) +

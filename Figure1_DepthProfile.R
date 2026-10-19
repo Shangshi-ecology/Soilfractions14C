@@ -3,7 +3,6 @@
 
 
 ## Authors:   Shangshi Liu, Jonathan Sanderman, Mark A. Bradford
-# Citation:  [add manuscript citation when accepted]
 
 # This script reproduces Figure 1 of the manuscript. It loads the ISRaD
 # flat-fraction product, pairs free-light and occluded-light POM with the
@@ -148,6 +147,11 @@ d <- d |>
 # are algebraically consistent (CI excludes 0 ⇔ p < 0.05).  Strata with
 # only one contributing study (k = 1) carry no between-study variance
 # information; we report the sample mean only with no CI and no p.
+# A Wald z-test, the default in most meta-analyses, is used here and may
+# reduce the risk of Type II error (missing a real occluded POM-MAOM
+# difference). Significant results in strata with few studies should
+# therefore be interpreted with caution, and more observations are needed
+# for deep soils.
 fit_nested <- function(y, entry, site, profile) {
   ok <- !is.na(y);  y <- y[ok]; entry <- entry[ok]
   site <- site[ok]; profile <- profile[ok]
@@ -179,13 +183,68 @@ fit_nested <- function(y, entry, site, profile) {
     co <- summary(m)$coefficients
     mu <- co[1, 1]; se <- co[1, 2]
     return(list(mean = mu, lo = mu - 1.96 * se, hi = mu + 1.96 * se,
-                 p = 2 * (1 - pnorm(abs(mu / se))),
+                 p = 2 * pnorm(-abs(mu / se)),
                  model = "ols", n = n, k = k))
   }
   co <- summary(m)$coefficients
   mu <- co[1, 1]; se <- co[1, 2]
   list(mean = mu, lo = mu - 1.96 * se, hi = mu + 1.96 * se,
-       p = 2 * (1 - pnorm(abs(mu / se))), model = used, n = n, k = k)
+       p = 2 * pnorm(-abs(mu / se)), model = used, n = n, k = k)
+}
+
+# -----------------------------------------------------------------------------
+# Annotation columns inside each difference panel:
+#   k = 38 (496)    P = 3.8×10⁻⁵
+# k = number of independent studies, the number in brackets = number of paired
+# observations (n).  The "k" column and the "P" column are each left-aligned at
+# a fixed position, so all k values and all P values line up vertically.
+# P >= 0.01 is shown to two significant figures (three if rounding would
+# cross 0.05); P < 0.01 in scientific notation with a two-figure mantissa
+# written with Unicode superscripts, so every label has the same height.
+# P is omitted for strata without an inferential test (k = 1 or n < 2).
+#
+# Layout: the x range runs from the lowest raw point to the highest CI bound; the label
+# block takes the right-hand LAB_FRAC of the panel width, starting just right
+# of the highest CI bound, so labels never overlap bars (they may overlap raw
+# points).  The left limit is the lowest raw point, so no data are dropped.  The P column starts LAB_P_OFFSET (fraction of panel width) to the
+# right of the k column.
+# -----------------------------------------------------------------------------
+LAB_FRAC     <- 0.37
+LAB_P_OFFSET <- 0.17
+LAB_SIZE     <- 1.7   # label text size (mm)
+
+SUP_DIGITS <- c("⁰", "¹", "²", "³", "⁴",
+                "⁵", "⁶", "⁷", "⁸", "⁹")
+to_sup <- function(e) {
+  ch <- strsplit(as.character(abs(e)), "")[[1]]
+  paste0(if (e < 0) "⁻" else "",
+         paste(SUP_DIGITS[as.integer(ch) + 1], collapse = ""))
+}
+fmt_p_str <- function(x) {
+  if (is.na(x)) return(NA_character_)
+  if (x < 1e-300) return(paste0("< 10", to_sup(-300)))
+  if (x >= 0.01) {
+    d <- if ((signif(x, 2) < 0.05) != (x < 0.05)) 3 else 2
+    return(paste0("= ", formatC(signif(x, d), digits = d, format = "fg",
+                                flag = "#")))
+  }
+  e <- floor(log10(x)); m <- signif(x / 10^e, 2)
+  if (m >= 10) { m <- m / 10; e <- e + 1 }
+  paste0("= ", formatC(m, digits = 1, format = "f"), "×10", to_sup(e))
+}
+fmt_k_label <- function(k, n, p) {
+  sprintf('italic(k)*" = %d (%d)"', k, n)
+}
+fmt_p_label <- function(p) {
+  s <- vapply(p, fmt_p_str, character(1))
+  ifelse(is.na(s), NA_character_, sprintf('italic(P)*" %s"', s))
+}
+# x positions (data units): bars span [lo, hi]; labels start at hi
+label_layout <- function(lo, hi) {
+  lim_hi <- lo + (hi - lo) / (1 - LAB_FRAC)
+  list(lim = c(lo, lim_hi),
+       x_k = hi,
+       x_p = hi + LAB_P_OFFSET * (lim_hi - lo))
 }
 
 # -----------------------------------------------------------------------------
@@ -319,13 +378,13 @@ bind_rows(
 # -----------------------------------------------------------------------------
 # 8. Plot styling
 # -----------------------------------------------------------------------------
-# Colour palette follows a colour-blind-safe scheme: red = free POM,
+# Colour palette follows a colour-blind-safe scheme: light orange = free POM,
 # orange = occluded POM, blue = MAOM, dark grey = within-aliquot paired
 # difference.  Marker fill on the diff panels encodes LMM significance
 # (filled when p < 0.05, hollow otherwise).
-C_FPOM <- "#D62728"
+C_FPOM <- "#FFA35C"   # light orange (free POM; lighter than occluded-POM orange)
 C_OPOM <- "#D55E00"
-C_MAOM <- "#0072B2"
+C_MAOM <- "#0079D5"
 C_DIFF <- "#444444"
 C_ZERO <- "#8B7355"
 XRANGE_PROFILE <- c(-1050, 250)
@@ -343,7 +402,8 @@ theme_nature <- function() {
                                               linewidth = 0.25),
           legend.title    = element_blank(),
           legend.text     = element_text(size = 6.5),
-          legend.key.size = unit(0.3, "cm"))
+          legend.key.size = unit(0.3, "cm"),
+          plot.margin     = margin(2, 4, 2, 2))
 }
 
 # Alternating row-stripe background.  The y-axis is reversed so position 1
@@ -404,18 +464,27 @@ plot_profile <- function(pools, raw_long, summary_df,
 # (the "All" row is summary-only).  Marker fill on the LMM summary point
 # encodes significance: filled when p < 0.05, hollow otherwise.  Counts
 # (k = number of studies, n = number of paired observations) and the
-# significance star are annotated to the right of each CI bar.
+# exact P value are annotated to the right of each CI bar.
 plot_diff <- function(diff_summary, wide_pair_df, panel_tag, panel_title) {
   ds <- diff_summary |>
     mutate(sig_zero = !is.na(p) & p < 0.05,
            fill_col = ifelse(sig_zero, C_DIFF, "white"),
-           label    = sprintf("k=%d, n=%d %s", k, n, sig))
+           lab_k    = fmt_k_label(k, n, p),
+           lab_p    = fmt_p_label(p))
 
   finite  <- ds |> filter(!is.na(hi), !is.na(lo))
   xmax    <- max(c(finite$hi, wide_pair_df$value, 200), na.rm = TRUE)
   xmin    <- min(c(finite$lo, wide_pair_df$value, -200), na.rm = TRUE)
   xpad    <- max(60, 0.05 * (xmax - xmin))
-  x_annot <- xmax + xpad
+
+  # Left limit: the lowest raw point, CI bound or mean (no empty space, no
+  # points dropped).  Right: the label block starts just past the highest CI
+  # bound or mean, so labels never overlap bars (raw points may sit beneath).
+  b_lo <- min(c(wide_pair_df$value, finite$lo, ds$mean, 0), na.rm = TRUE)
+  b_hi <- max(c(finite$hi, ds$mean, 0), na.rm = TRUE)
+  bpad <- 0.03 * (b_hi - b_lo)
+  lay  <- label_layout(b_lo - bpad, b_hi + bpad)
+  ds  <- ds |> mutate(x_k = lay$x_k, x_p = lay$x_p)
 
   ggplot() +
     geom_rect(data = stripe_df,
@@ -437,10 +506,16 @@ plot_diff <- function(diff_summary, wide_pair_df, panel_tag, panel_title) {
                aes(x = mean, y = bin, fill = I(fill_col)),
                shape = 21, color = "black",
                size = 1.6, stroke = 0.35, na.rm = TRUE) +
-    geom_text(data = ds, aes(x = x_annot, y = bin, label = label),
-              hjust = 0, size = 1.95, color = "grey25", na.rm = TRUE) +
+    geom_text(data = ds, aes(x = x_k, y = bin, label = lab_k),
+              hjust = 0, size = LAB_SIZE, color = "grey25", na.rm = TRUE,
+              parse = TRUE) +
+    geom_text(data = ds, aes(x = x_p, y = bin, label = lab_p),
+              hjust = 0, size = LAB_SIZE, color = "grey25", na.rm = TRUE,
+              parse = TRUE) +
     scale_y_discrete(limits = rev(bin_labs)) +
-    coord_cartesian(xlim = c(xmin - xpad, x_annot + 240), clip = "off") +
+    scale_x_continuous(breaks = scales::breaks_extended()(c(b_lo, b_hi)),
+                       expand = expansion(0, 0)) +
+    coord_cartesian(xlim = lay$lim, clip = "on") +
     labs(x = expression("POM − MAOM  "*Delta^14*"C (‰)"),
          y = "Depth (cm)",
          tag = panel_tag, title = panel_title) +
@@ -491,8 +566,7 @@ leg <- make_legend_panel(
               "ns (CI crosses 0)" = "white"))
 
 fig <- (pa | pb) / (pc | pd) +
-  plot_layout(widths = c(1, 1.05)) &
-  theme(plot.margin = margin(2, 4, 2, 2))
+  plot_layout(widths = c(1, 1.05))
 
 final <- wrap_elements(full = fig) /
          wrap_elements(full = leg) +

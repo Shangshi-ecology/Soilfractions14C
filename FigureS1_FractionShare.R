@@ -1,12 +1,11 @@
 # =============================================================================
-# Figure S1 — Share of soil organic carbon held by each density fraction,
+# Extended Data Fig. 1 (file name FigureS1 kept) — Share of soil organic carbon held by each density fraction,
 #             top 30 cm.
 #
 ## Authors:   Shangshi Liu, Jonathan Sanderman, Mark A. Bradford
-# Citation:  [add manuscript citation when accepted]
 
 #
-# This script reproduces Supplementary Figure 1 of the manuscript. It loads
+# This script reproduces Extended Data Fig. 1 of the manuscript. It loads
 # the ISRaD flat-fraction product, retains soil samples for which all three
 # density fractions were measured on the same physical aliquot, and expresses
 # the carbon content of each fraction as its share of total layer organic
@@ -179,12 +178,12 @@ write_csv(summ, "FigureS1_FractionShare_table.csv")
 # -----------------------------------------------------------------------------
 # 7. Plot styling
 # -----------------------------------------------------------------------------
-# Colour palette matches Figures 1 and 2: red = free POM, orange = occluded
+# Colour palette matches Figures 1 and 2: light orange = free POM, orange = occluded
 # POM, blue = MAOM.  Occluded POM additionally carries a triangular marker so
 # the three fractions remain distinguishable in greyscale.
-C_FPOM <- "#D62728"
+C_FPOM <- "#FFA35C"   # light orange (free POM; lighter than occluded-POM orange)
 C_OPOM <- "#D55E00"
-C_MAOM <- "#0072B2"
+C_MAOM <- "#0079D5"
 
 pal <- c(fPOM = C_FPOM, oPOM = C_OPOM, MAOM = C_MAOM)
 shp <- c(fPOM = 21,     oPOM = 24,     MAOM = 21)
@@ -225,7 +224,7 @@ stripe_df <- tibble(y0 = seq_along(bin_labs) - 1) |> filter(y0 %% 2 == 1)
 # The x limit is therefore set by coord_cartesian() rather than by
 # scale_x_continuous(), because a scale limit would drop the annotation.
 n_lab   <- summ |> filter(pool == "MAOM") |>
-  transmute(y0, label = sprintf("k=%d, n=%d", k, n))
+  transmute(y0, label = sprintf('italic(k)*" = %d (%d)"', k, n))  # as Figs 1-2
 x_annot <- 101
 
 # -----------------------------------------------------------------------------
@@ -254,7 +253,7 @@ p <- ggplot() +
              color = "black", size = 1.9, stroke = 0.3) +
   geom_text(data = n_lab,
             aes(x = x_annot, y = y0, label = label),
-            hjust = 0, size = 1.8, color = "grey45") +
+            hjust = 0, size = 1.8, color = "grey45", parse = TRUE) +
   scale_color_manual(values = pal, guide = "none") +
   scale_shape_manual(values = shp,
                       breaks = c("fPOM", "oPOM", "MAOM"),
